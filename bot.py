@@ -5,11 +5,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
-import time
-
-# Зареждане на токена от .env
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+
 
 # Проверка дали токенът е зареден
 if not TOKEN:
