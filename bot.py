@@ -27,7 +27,15 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 # Връзка с Google Sheets
 SHEET_NAME = "LSPD BOT"
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+import json
+
+credentials_content = os.getenv("CREDENTIALS_JSON")
+if not credentials_content:
+    print("❌ Грешка: CREDENTIALS_JSON не е зададен!")
+    exit(1)
+
+creds_dict = json.loads(credentials_content)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
 try:
