@@ -1,23 +1,27 @@
+import os
 import discord
 from discord.ext import commands
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
-import os
-from dotenv import load_dotenv
-load_dotenv()
-TOKEN = os.getenv("DISCORD_TOKEN")
 
+# ⛔ Премахни dotenv! Railway няма нужда от него
+# from dotenv import load_dotenv
+# load_dotenv()
+
+# ✅ Взимане на токена от средата (Railway Variables)
+TOKEN = os.getenv("DISCORD_TOKEN")
 
 # Проверка дали токенът е зареден
 if not TOKEN:
-    print("❌ Грешка: DISCORD_TOKEN не е намерен в .env файла!")
+    print("❌ Грешка: DISCORD_TOKEN не е намерен!")
     exit(1)
 
-# Създаване на бота с intents
+# Създаване на intents
 intents = discord.Intents.default()
 intents.members = True
-intents.message_content = True  # Добавяме този intent, за да избегнем предупреждения
+intents.message_content = True
+
 bot = commands.Bot(command_prefix="/", intents=intents)
 
 # Връзка с Google Sheets
@@ -31,7 +35,6 @@ try:
     leaves_sheet = client.open(SHEET_NAME).worksheet("Leaves")
     print("✅ Google Sheets свързан успешно!")
 
-    # Проверка и добавяне на заглавия, ако липсват
     if not shifts_sheet.get_all_values():
         shifts_sheet.append_row(["Потребител", "Начало", "Край", "Изработено време"])
 
@@ -40,6 +43,8 @@ try:
 except Exception as e:
     print(f"❌ Грешка при връзката с Google Sheets: {e}")
     exit(1)
+
+
 
 # Функция за получаване на името в сървъра
 def get_nickname(interaction):
