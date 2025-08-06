@@ -6,6 +6,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import time
+import pytz
+sofia_tz = pytz.timezone("Europe/Sofia")
+
 
 # ⛔ Премахни dotenv! Railway няма нужда от него
 # from dotenv import load_dotenv
@@ -74,7 +77,7 @@ async def startshift(interaction: discord.Interaction):
 
     start_time = time.time()
     user = get_nickname(interaction)
-    start_shift_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    start_shift_time = datetime.now(sofia_tz).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[STARTSHIFT] Начало на обработка за {user} в {start_shift_time}")
 
     try:
@@ -104,7 +107,7 @@ async def endshift(interaction: discord.Interaction):
 
     start_time = time.time()
     user = get_nickname(interaction)
-    end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    end_time = datetime.now(sofia_tz).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[ENDSHIFT] Начало на обработка за {user} в {end_time}")
 
     try:
@@ -168,7 +171,7 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
             print(f"[LEAVE] Грешка в датите за {user}, завърши за {time.time() - start_time:.2f} секунди")
             return
 
-        current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        current_date = datetime.now(sofia_tz).replace(hour=0, minute=0, second=0, microsecond=0)
         min_allowed_date = current_date - timedelta(days=1)
 
         if start_dt < min_allowed_date:
