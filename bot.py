@@ -4,6 +4,8 @@ from discord.ext import commands
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+import time
 
 # ⛔ Премахни dotenv! Railway няма нужда от него
 # from dotenv import load_dotenv
