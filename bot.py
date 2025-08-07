@@ -1,46 +1,31 @@
-import os
 import discord
 from discord.ext import commands
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
+import os
 from dotenv import load_dotenv
 import time
-import pytz
-sofia_tz = pytz.timezone("Europe/Sofia")
 
-
-# ⛔ Премахни dotenv! Railway няма нужда от него
-# from dotenv import load_dotenv
-# load_dotenv()
-
-# ✅ Взимане на токена от средата (Railway Variables)
+# Зареждане на токена от .env
+load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 # Проверка дали токенът е зареден
 if not TOKEN:
-    print("❌ Грешка: DISCORD_TOKEN не е намерен!")
+    print("❌ Грешка: DISCORD_TOKEN не е намерен в .env файла!")
     exit(1)
 
-# Създаване на intents
+# Създаване на бота с intents
 intents = discord.Intents.default()
 intents.members = True
-intents.message_content = True
-
+intents.message_content = True  # Добавяме този intent, за да избегнем предупреждения
 bot = commands.Bot(command_prefix="/", intents=intents)
 
 # Връзка с Google Sheets
 SHEET_NAME = "LSPD BOT"
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-import json
-
-credentials_content = os.getenv("CREDENTIALS_JSON")
-if not credentials_content:
-    print("❌ Грешка: CREDENTIALS_JSON не е зададен!")
-    exit(1)
-
-creds_dict = json.loads(credentials_content)
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 client = gspread.authorize(creds)
 
 try:
@@ -48,6 +33,7 @@ try:
     leaves_sheet = client.open(SHEET_NAME).worksheet("Leaves")
     print("✅ Google Sheets свързан успешно!")
 
+    # Проверка и добавяне на заглавия, ако липсват
     if not shifts_sheet.get_all_values():
         shifts_sheet.append_row(["Потребител", "Начало", "Край", "Изработено време"])
 
@@ -56,8 +42,6 @@ try:
 except Exception as e:
     print(f"❌ Грешка при връзката с Google Sheets: {e}")
     exit(1)
-
-
 
 # Функция за получаване на името в сървъра
 def get_nickname(interaction):
@@ -77,7 +61,7 @@ async def startshift(interaction: discord.Interaction):
 
     start_time = time.time()
     user = get_nickname(interaction)
-    start_shift_time = datetime.now(sofia_tz).strftime("%Y-%m-%d %H:%M:%S")
+    start_shift_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[STARTSHIFT] Начало на обработка за {user} в {start_shift_time}")
 
     try:
@@ -107,7 +91,7 @@ async def endshift(interaction: discord.Interaction):
 
     start_time = time.time()
     user = get_nickname(interaction)
-    end_time = datetime.now(sofia_tz).strftime("%Y-%m-%d %H:%M:%S")
+    end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[ENDSHIFT] Начало на обработка за {user} в {end_time}")
 
     try:
@@ -171,7 +155,7 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
             print(f"[LEAVE] Грешка в датите за {user}, завърши за {time.time() - start_time:.2f} секунди")
             return
 
-        current_date = datetime.now(sofia_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         min_allowed_date = current_date - timedelta(days=1)
 
         if start_dt < min_allowed_date:
