@@ -44,8 +44,9 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
 try:
-    shifts_sheet = client.open(SHEET_NAME).worksheet("Shifts")
-    leaves_sheet = client.open(SHEET_NAME).worksheet("Leaves")
+    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1gg4Vgu5h-HBKU_qGWB8sCuip1zIedoNvsCoEXkZ2NHY/edit?gid=0")
+shifts_sheet = sheet.worksheet("Shifts")
+    leaves_sheet = sheet.worksheet("Leaves")
     print("✅ Google Sheets свързан успешно!")
 
     if not shifts_sheet.get_all_values():
