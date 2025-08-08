@@ -171,13 +171,22 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
     _, display = get_username_and_display(interaction)
 
     try:
-        start_dt = datetime.strptime(start_date, "%d.%m.%Y")
-        end_dt = datetime.strptime(end_date, "%d.%m.%Y")
+        # --- КОРЕКЦИЯТА ЗАПОЧВА ТУК ---
+        # 1. Първо парсваме датите като "наивни"
+        naive_start_dt = datetime.strptime(start_date, "%d.%m.%Y")
+        naive_end_dt = datetime.strptime(end_date, "%d.%m.%Y")
+
+        # 2. След това ги правим "осъзнати" за часовата зона, за да можем да ги сравняваме
+        start_dt = sofia_tz.localize(naive_start_dt)
+        end_dt = sofia_tz.localize(naive_end_dt)
+        # --- КОРЕКЦИЯТА ПРИКЛЮЧВА ТУК ---
+
         total_days = (end_dt - start_dt).days + 1
         if total_days < 1:
             await interaction.followup.send("❌ Крайната дата трябва да е след началната!", ephemeral=False)
             return
 
+        # Сега сравнението работи, защото и двете дати са "осъзнати"
         today0 = datetime.now(sofia_tz).replace(hour=0, minute=0, second=0, microsecond=0)
         if start_dt < (today0 - timedelta(days=1)):
             await interaction.followup.send(
@@ -193,8 +202,9 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
         # Запис в лист Leaves
         leaves_sheet.append_row([
             display,
-            start_dt.strftime("%Y-%m-%d"),
-            end_dt.strftime("%Y-%m-%d"),
+            # Записваме датите в Sheets в неутрален формат без часова зона
+            naive_start_dt.strftime("%Y-%m-%d"),
+            naive_end_dt.strftime("%Y-%m-%d"),
             total_days,
             reason
         ])
@@ -203,6 +213,15 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
             f"✅ {display} заяви отпуск от {start_date} до {end_date} ({total_days} дни)\n"
             f"📝 **Причина:** {reason}",
             ephemeral=False
+        )
+    except ValueError:
+        await interaction.followup.send(
+            "❌ Невалиден формат на датите. Използвай ДД.ММ.ГГГГ (пример: 13.03.2025).",
+            ephemeral=False
+        )
+    except Exception as e:
+        print(f"[LEAVE] Необработена грешка: {e}")
+        await interaction.followup.send("❌ Възникна грешка при заявяване на отпуск!", ephemeral=False)
         )
     except ValueError:
         await interaction.followup.send(
