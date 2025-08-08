@@ -52,11 +52,6 @@ except Exception as e:
 
 # --- Помощни функции ---
 def get_username_and_display(interaction):
-    """
-    Връща:
-      username -> стабилното Discord username (без #tag)
-      display  -> какво пишем в колона A: 'username (nickname)'
-    """
     username = interaction.user.name
     if interaction.guild:
         member = interaction.guild.get_member(interaction.user.id)
@@ -67,16 +62,11 @@ def get_username_and_display(interaction):
     return username, display
 
 def a_cell_matches_username(a_value: str, username: str) -> bool:
-    """
-    Съвпадение по username, игнорираме никнейма:
-    - A == username
-    - или A започва с 'username ('   -> 'username (nickname)'
-    """
     if not a_value:
         return False
     return a_value == username or a_value.startswith(username + " (")
 
-# --- Команди ---
+# --- Команди (ОПТИМИЗИРАНИ) ---
 
 # 📌 /startshift
 @bot.tree.command(name="startshift", description="Започва смяната и записва времето на влизане")
@@ -92,16 +82,19 @@ async def startshift(interaction: discord.Interaction):
     start_shift_time = datetime.now(sofia_tz).strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        rows = shifts_sheet.get_all_values()
-        # Проверка за активна смяна по username (колона A)
-        for i, row in enumerate(rows[1:], start=2):
-            a = row[0] if len(row) > 0 else ""
-            c = row[2] if len(row) > 2 else ""
-            if a_cell_matches_username(a, username) and (c is None or c == ""):
+        # ОПТИМИЗАЦИЯ: Взимаме само колони A и C, нужни за проверката.
+        col_a_values = shifts_sheet.col_values(1)
+        col_c_values = shifts_sheet.col_values(3)
+
+        # Проверка за активна смяна
+        for i in range(1, len(col_a_values)): # Пропускаме хедъра
+            a_value = col_a_values[i]
+            c_value = col_c_values[i] if i < len(col_c_values) else ""
+            if a_cell_matches_username(a_value, username) and (c_value is None or c_value == ""):
                 await interaction.followup.send("❌ Вече имаш активна смяна!", ephemeral=False)
                 return
 
-        # Запис в Shifts: A,B,C,D
+        # Запис в Shifts: append_row е бърза операция
         shifts_sheet.append_row([display, start_shift_time, "", ""])
         await interaction.followup.send(f"✅ {display} започна смяната в {start_shift_time}", ephemeral=False)
         print(f"[STARTSHIFT] ОК за {display} ({time.time() - t0:.2f}s)")
@@ -123,22 +116,29 @@ async def endshift(interaction: discord.Interaction):
     end_time = datetime.now(sofia_tz).strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        rows = shifts_sheet.get_all_values()
-        # Търсим отдолу-нагоре последната отворена смяна за този username
-        target_row = None
-        for i in range(len(rows) - 1, 0, -1):
-            row = rows[i]
-            a = row[0] if len(row) > 0 else ""
-            c = row[2] if len(row) > 2 else ""
-            if a_cell_matches_username(a, username) and (c is None or c == ""):
-                target_row = i + 1  # gspread е 1-базирано
+        # ОПТИМИЗАЦИЯ: Взимаме само колони A и C
+        col_a_values = shifts_sheet.col_values(1)
+        col_c_values = shifts_sheet.col_values(3)
+
+        target_row_index = -1
+        # Търсим отдолу-нагоре последната отворена смяна
+        for i in range(len(col_a_values) - 1, 0, -1):
+            a_value = col_a_values[i]
+            c_value = col_c_values[i] if i < len(col_c_values) else ""
+            if a_cell_matches_username(a_value, username) and (c_value is None or c_value == ""):
+                target_row_index = i + 1  # gspread е 1-базирано
                 break
 
-        if target_row is None:
+        if target_row_index == -1:
             await interaction.followup.send("❌ Няма започната смяна за приключване!", ephemeral=False)
             return
 
-        start_time_str = shifts_sheet.cell(target_row, 2).value
+        # Взимаме стойността само от нужната клетка
+        start_time_str = shifts_sheet.cell(target_row_index, 2).value
+        if not start_time_str:
+             await interaction.followup.send("❌ Грешка: Не може да се намери началното време на смяната.", ephemeral=False)
+             return
+
         start_dt = datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S")
         end_dt = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
         worked_time = end_dt - start_dt
@@ -146,9 +146,9 @@ async def endshift(interaction: discord.Interaction):
         minutes = int(rem // 60)
         worked_str = f"{int(hours)}ч {minutes}мин"
 
-        # Обновяваме C и D в Shifts
-        shifts_sheet.update(f"C{target_row}", [[end_time]])
-        shifts_sheet.update(f"D{target_row}", [[worked_str]])
+        # Обновяваме само нужните клетки - по-бързо от update на цял ред
+        shifts_sheet.update_cell(target_row_index, 3, end_time)
+        shifts_sheet.update_cell(target_row_index, 4, worked_str)
 
         await interaction.followup.send(
             f"✅ {display} приключи смяната в {end_time} (⏳ {worked_str})",
@@ -159,7 +159,7 @@ async def endshift(interaction: discord.Interaction):
         print(f"[ENDSHIFT] Необработена грешка: {e}")
         await interaction.followup.send("❌ Възникна грешка при приключване на смяната!", ephemeral=False)
 
-# 📌 /leave
+# 📌 /leave (Тази команда е бърза и не се нуждае от промяна)
 @bot.tree.command(name="leave", description="Заявка за отпуск за определен период с причина")
 async def leave(interaction: discord.Interaction, start_date: str, end_date: str, reason: str):
     try:
@@ -167,56 +167,27 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
     except Exception as e:
         print(f"[LEAVE] Грешка при defer: {e}")
         return
-
     _, display = get_username_and_display(interaction)
-
     try:
-        # 1. Първо парсваме датите като "наивни"
         naive_start_dt = datetime.strptime(start_date, "%d.%m.%Y")
         naive_end_dt = datetime.strptime(end_date, "%d.%m.%Y")
-
-        # 2. След това ги правим "осъзнати" за часовата зона, за да можем да ги сравняваме
         start_dt = sofia_tz.localize(naive_start_dt)
         end_dt = sofia_tz.localize(naive_end_dt)
-
         total_days = (end_dt - start_dt).days + 1
         if total_days < 1:
             await interaction.followup.send("❌ Крайната дата трябва да е след началната!", ephemeral=False)
             return
-
-        # Сега сравнението работи, защото и двете дати са "осъзнати"
         today0 = datetime.now(sofia_tz).replace(hour=0, minute=0, second=0, microsecond=0)
         if start_dt < (today0 - timedelta(days=1)):
-            await interaction.followup.send(
-                "❌ Не можеш да заявиш отпуск, започващ повече от 1 ден назад.",
-                ephemeral=False
-            )
+            await interaction.followup.send("❌ Не можеш да заявиш отпуск, започващ повече от 1 ден назад.",ephemeral=False)
             return
-
         if not reason.strip():
             await interaction.followup.send("❌ Моля, добави причина за отпуска.", ephemeral=False)
             return
-
-        # Запис в лист Leaves
-        leaves_sheet.append_row([
-            display,
-            # Записваме датите в Sheets в неутрален формат без часова зона
-            naive_start_dt.strftime("%Y-%m-%d"),
-            naive_end_dt.strftime("%Y-%m-%d"),
-            total_days,
-            reason
-        ])
-
-        await interaction.followup.send(
-            f"✅ {display} заяви отпуск от {start_date} до {end_date} ({total_days} дни)\n"
-            f"📝 **Причина:** {reason}",
-            ephemeral=False
-        )
+        leaves_sheet.append_row([display, naive_start_dt.strftime("%Y-%m-%d"), naive_end_dt.strftime("%Y-%m-%d"), total_days, reason])
+        await interaction.followup.send(f"✅ {display} заяви отпуск от {start_date} до {end_date} ({total_days} дни)\n📝 **Причина:** {reason}", ephemeral=False)
     except ValueError:
-        await interaction.followup.send(
-            "❌ Невалиден формат на датите. Използвай ДД.ММ.ГГГГ (пример: 13.03.2025).",
-            ephemeral=False
-        )
+        await interaction.followup.send("❌ Невалиден формат на датите. Използвай ДД.ММ.ГГГГ (пример: 13.03.2025).", ephemeral=False)
     except Exception as e:
         print(f"[LEAVE] Необработена грешка: {e}")
         await interaction.followup.send("❌ Възникна грешка при заявяване на отпуск!", ephemeral=False)
@@ -233,17 +204,22 @@ async def report(interaction: discord.Interaction):
     username, display = get_username_and_display(interaction)
 
     try:
-        rows = shifts_sheet.get_all_values()
-        user_rows = [r for r in rows[1:] if a_cell_matches_username(r[0] if r else "", username)]
+        # ОПТИМИЗАЦИЯ: Взимаме всички данни наведнъж, но ги филтрираме локално.
+        # За отчет това е приемливо, тъй като не се случва толкова често.
+        all_records = shifts_sheet.get_all_records() # Връща списък от речници
+        
+        user_rows = [r for r in all_records if a_cell_matches_username(r.get('Потребител', ''), username)]
+        
         if not user_rows:
             await interaction.followup.send("❌ Няма записано работно време!", ephemeral=False)
             return
 
         report_text = f"📋 **Отчет за {display}:**\n"
+        # Показваме последните 15 записа
         for r in user_rows[-15:]:
-            start = r[1] if len(r) > 1 else "❓"
-            end = r[2] if len(r) > 2 else "❓"
-            worked = r[3] if len(r) > 3 else "Неизвестно"
+            start = r.get('Начало', '❓')
+            end = r.get('Край', '❓')
+            worked = r.get('Изработено време', 'Неизвестно')
             report_text += f"📅 {start} ➝ {end} ⏳ {worked}\n"
 
         await interaction.followup.send(report_text, ephemeral=False)
