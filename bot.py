@@ -41,7 +41,7 @@ try:
     leaves_sheet = client.open(SHEET_NAME).worksheet("Leaves")
     print("✅ Google Sheets свързан успешно!")
 
-    # Хедъри
+    # Хедъри, ако липсват
     if not shifts_sheet.get_all_values():
         shifts_sheet.append_row(["Потребител", "Начало", "Край", "Изработено време"])
     if not leaves_sheet.get_all_values():
@@ -92,7 +92,7 @@ async def startshift(interaction: discord.Interaction):
     start_shift_time = datetime.now(sofia_tz).strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        rows = shifts_sheet.get_all_values()  # само лист Shifts
+        rows = shifts_sheet.get_all_values()
         # Проверка за активна смяна по username (колона A)
         for i, row in enumerate(rows[1:], start=2):
             a = row[0] if len(row) > 0 else ""
@@ -123,7 +123,7 @@ async def endshift(interaction: discord.Interaction):
     end_time = datetime.now(sofia_tz).strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        rows = shifts_sheet.get_all_values()  # само лист Shifts
+        rows = shifts_sheet.get_all_values()
         # Търсим отдолу-нагоре последната отворена смяна за този username
         target_row = None
         for i in range(len(rows) - 1, 0, -1):
@@ -138,7 +138,7 @@ async def endshift(interaction: discord.Interaction):
             await interaction.followup.send("❌ Няма започната смяна за приключване!", ephemeral=False)
             return
 
-        start_time_str = shifts_sheet.cell(target_row, 2).value  # B
+        start_time_str = shifts_sheet.cell(target_row, 2).value
         start_dt = datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S")
         end_dt = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
         worked_time = end_dt - start_dt
@@ -171,7 +171,6 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
     _, display = get_username_and_display(interaction)
 
     try:
-        # --- КОРЕКЦИЯТА ЗАПОЧВА ТУК ---
         # 1. Първо парсваме датите като "наивни"
         naive_start_dt = datetime.strptime(start_date, "%d.%m.%Y")
         naive_end_dt = datetime.strptime(end_date, "%d.%m.%Y")
@@ -179,7 +178,6 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
         # 2. След това ги правим "осъзнати" за часовата зона, за да можем да ги сравняваме
         start_dt = sofia_tz.localize(naive_start_dt)
         end_dt = sofia_tz.localize(naive_end_dt)
-        # --- КОРЕКЦИЯТА ПРИКЛЮЧВА ТУК ---
 
         total_days = (end_dt - start_dt).days + 1
         if total_days < 1:
@@ -222,15 +220,6 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
     except Exception as e:
         print(f"[LEAVE] Необработена грешка: {e}")
         await interaction.followup.send("❌ Възникна грешка при заявяване на отпуск!", ephemeral=False)
-        )
-    except ValueError:
-        await interaction.followup.send(
-            "❌ Невалиден формат на датите. Използвай ДД.ММ.ГГГГ (пример: 13.03.2025).",
-            ephemeral=False
-        )
-    except Exception as e:
-        print(f"[LEAVE] Необработена грешка: {e}")
-        await interaction.followup.send("❌ Възникна грешка при заявяване на отпуск!", ephemeral=False)
 
 # 📌 /report
 @bot.tree.command(name="report", description="Генерира отчет за работното време")
@@ -244,7 +233,7 @@ async def report(interaction: discord.Interaction):
     username, display = get_username_and_display(interaction)
 
     try:
-        rows = shifts_sheet.get_all_values()  # само Shifts
+        rows = shifts_sheet.get_all_values()
         user_rows = [r for r in rows[1:] if a_cell_matches_username(r[0] if r else "", username)]
         if not user_rows:
             await interaction.followup.send("❌ Няма записано работно време!", ephemeral=False)
