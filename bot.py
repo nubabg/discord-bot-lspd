@@ -21,7 +21,6 @@ if not TOKEN:
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
-
 bot = commands.Bot(command_prefix="/", intents=intents)
 
 # --- Връзка с Google Sheets ---
@@ -37,58 +36,101 @@ try:
     creds_dict = json.loads(credentials_content)
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    
+
     shifts_sheet = client.open(SHEET_NAME).worksheet("Shifts")
     leaves_sheet = client.open(SHEET_NAME).worksheet("Leaves")
     print("✅ Google Sheets свързан успешно!")
 
-    # Проверка и създаване на хедъри, ако липсват
+    # Проверка и създаване/корекция на хедъри
     if not shifts_sheet.get_all_values():
-        shifts_sheet.append_row(["Потребител", "Начало", "Край", "Изработено време"])
+        shifts_sheet.append_row(["Потребител", "Начало", "Край", "Изработено време", "Discord ID"])
+    else:
+        headers = shifts_sheet.row_values(1)
+        expected = ["Потребител", "Начало", "Край", "Изработено време", "Discord ID"]
+        if len(headers) < 5 or headers[0:4] != expected[0:4] or (len(headers) >= 5 and headers[4] != "Discord ID"):
+            # Разширяваме/поправяме само ред 1 до A1:E1
+            new_headers = ["Потребител", "Начало", "Край", "Изработено време", "Discord ID"]
+            shifts_sheet.update("A1:E1", [new_headers])
 
     if not leaves_sheet.get_all_values():
         leaves_sheet.append_row(["Потребител", "Начало на отпуска", "Край на отпуска", "Общо дни", "Причина"])
+
 except Exception as e:
     print(f"❌ Грешка при връзката с Google Sheets: {e}")
     exit(1)
 
 # --- Помощни функции ---
-def get_nickname(interaction):
+def get_username_and_nick(interaction):
+    """Връща ('DiscordUsername (Nickname)', user_id) за запис в Row A + стабилно ID за проверки."""
+    user = interaction.user
+    username = user.name  # Discord username (без #tag)
+    # Вземаме никнейм от сървъра (ако има), иначе показваме същото като username
     if interaction.guild:
-        member = interaction.guild.get_member(interaction.user.id)
-        return member.nick if member and member.nick else interaction.user.name
-    return interaction.user.name
+        member = interaction.guild.get_member(user.id)
+        nickname = member.nick if member and member.nick else user.name
+    else:
+        nickname = user.name
 
-# --- Команди на бота (КОРИГИРАНИ ВЕРСИИ) ---
+    # Формат Row A: Username (Nickname)
+    if nickname.strip().lower() == username.strip().lower():
+        display = username  # избягваме дублиране Ivan (Ivan)
+    else:
+        display = f"{username} ({nickname})"
+
+    return display, str(user.id)
+
+def _find_open_shift_row_by_id(user_id: str):
+    """Връща номер на ред за отворена смяна по ID (колона E), или None."""
+    try:
+        cells = shifts_sheet.findall(user_id, in_column=5)
+        for cell in reversed(cells):  # последният е най-нов
+            end_val = shifts_sheet.cell(cell.row, 3).value  # C = 'Край'
+            if not end_val:
+                return cell.row
+    except Exception:
+        pass
+    return None
+
+def _find_open_shift_row_by_display(display: str):
+    """Fallback: намира отворена смяна по текста в колона A (Username (Nickname))."""
+    try:
+        cells = shifts_sheet.findall(display, in_column=1)
+        for cell in reversed(cells):
+            end_val = shifts_sheet.cell(cell.row, 3).value
+            if not end_val:
+                return cell.row
+    except Exception:
+        pass
+    return None
+
+# --- Команди на бота ---
 
 # 📌 Команда за започване на смяна
 @bot.tree.command(name="startshift", description="Започва смяната и записва времето на влизане")
 async def startshift(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
 
-    user_id = str(interaction.user.id)
-    user_nickname = get_nickname(interaction)
-    # Форматираме текста за първата колона
-    user_identifier = f"{user_id} ({user_nickname})"
+    display, user_id = get_username_and_nick(interaction)
     start_shift_time = datetime.now(sofia_tz).strftime("%Y-%m-%d %H:%M:%S")
-    
-    print(f"[STARTSHIFT] Начало на обработка за {user_identifier}")
+    print(f"[STARTSHIFT] Начало за {display} (ID: {user_id})")
 
     try:
-        # Търсим по ID, за да видим дали има активна смяна
-        all_cells = shifts_sheet.findall(user_id, in_column=1)
-        for cell in all_cells:
-            # "Край" е в колона C (индекс 3)
-            end_time_val = shifts_sheet.cell(cell.row, 3).value 
-            if end_time_val is None or end_time_val == "":
-                await interaction.followup.send("❌ Вече имаш активна смяна!", ephemeral=False)
-                print(f"[STARTSHIFT] Активна смяна открита за {user_identifier}")
-                return
+        # 1) Проверка по ID (колона E)
+        row = _find_open_shift_row_by_id(user_id)
 
-        # Записваме новия ред
-        shifts_sheet.append_row([user_identifier, start_shift_time, "", ""])
-        await interaction.followup.send(f"✅ {user_nickname} започна смяната в {start_shift_time}", ephemeral=False)
-        print(f"[STARTSHIFT] Успешно записване за {user_identifier}")
+        # 2) Fallback: ако няма по ID, но има стар запис по display (колона A)
+        if row is None:
+            row = _find_open_shift_row_by_display(display)
+
+        if row is not None:
+            await interaction.followup.send("❌ Вече имаш активна смяна!", ephemeral=False)
+            print(f"[STARTSHIFT] Открита активна смяна (ред {row}) за {display}")
+            return
+
+        # Запис: A=display, B=start, C=end, D=worked, E=user_id
+        shifts_sheet.append_row([display, start_shift_time, "", "", user_id])
+        await interaction.followup.send(f"✅ {display} започна смяната в {start_shift_time}", ephemeral=False)
+        print(f"[STARTSHIFT] Записан нов ред за {display}")
 
     except Exception as e:
         print(f"[STARTSHIFT] Необработена грешка: {e}")
@@ -99,45 +141,44 @@ async def startshift(interaction: discord.Interaction):
 async def endshift(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
 
-    user_id = str(interaction.user.id)
-    user_nickname = get_nickname(interaction)
-    # Форматираме новия идентификатор, за да го запишем
-    user_identifier = f"{user_id} ({user_nickname})"
+    display, user_id = get_username_and_nick(interaction)
     end_time_str = datetime.now(sofia_tz).strftime("%Y-%m-%d %H:%M:%S")
-    
-    print(f"[ENDSHIFT] Начало на обработка за {user_identifier}")
+    print(f"[ENDSHIFT] Начало за {display} (ID: {user_id})")
 
     try:
-        # Намираме всички редове, които съдържат ID-то на потребителя
-        all_user_cells = shifts_sheet.findall(user_id, in_column=1)
+        # 1) Търсим последната отворена смяна по ID (колона E)
+        row = _find_open_shift_row_by_id(user_id)
 
-        # Търсим последния отворен шифт отзад-напред
-        for cell in reversed(all_user_cells):
-            row_values = shifts_sheet.row_values(cell.row)
-            # "Край" е в трета колона (индекс 2)
-            if len(row_values) < 3 or row_values[2] == "":
-                start_time_str = row_values[1] # "Начало" е във втора колона
-                start_time_dt = datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S")
-                end_time_dt = datetime.strptime(end_time_str, "%Y-%m-%d %H:%M:%S")
+        # 2) Fallback: ако няма ID (стари записи), търсим по колона A (display)
+        if row is None:
+            row = _find_open_shift_row_by_display(display)
 
-                worked_time = end_time_dt - start_time_dt
-                worked_hours, remainder = divmod(worked_time.total_seconds(), 3600)
-                worked_minutes = remainder // 60
-                worked_time_str = f"{int(worked_hours)}ч {int(worked_minutes)}мин"
-                
-                # Актуализираме потребителя, края на смяната и изработеното време
-                shifts_sheet.update(f"A{cell.row}:D{cell.row}", [[user_identifier, start_time_str, end_time_str, worked_time_str]])
-                
-                await interaction.followup.send(
-                    f"✅ {user_nickname} приключи смяната в {end_time_str} (⏳ {worked_time_str})\n\n"
-                    "💼 **Благодарим ви за днешната ви служба!**",
-                    ephemeral=False
-                )
-                print(f"[ENDSHIFT] Успешно приключване за {user_identifier}")
-                return
+        if row is None:
+            await interaction.followup.send("❌ Няма започната смяна за приключване!", ephemeral=False)
+            print(f"[ENDSHIFT] Няма активна смяна за {display}")
+            return
 
-        await interaction.followup.send("❌ Няма започната смяна за приключване!", ephemeral=False)
-        print(f"[ENDSHIFT] Няма активна смяна за {user_identifier}")
+        # Четем старт
+        start_time_str = shifts_sheet.cell(row, 2).value  # B = 'Начало'
+        if not start_time_str:
+            # ако липсва, нека все пак запишем край, за да не увисва
+            start_time_str = end_time_str
+
+        start_dt = datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S")
+        end_dt = datetime.strptime(end_time_str, "%Y-%m-%d %H:%M:%S")
+        worked = end_dt - start_dt
+        hours, rem = divmod(worked.total_seconds(), 3600)
+        minutes = int(rem // 60)
+        worked_str = f"{int(hours)}ч {minutes}мин"
+
+        # Обновяване на ред A..E (дописваме и ID, ако е липсвал)
+        shifts_sheet.update(f"A{row}:E{row}", [[display, start_time_str, end_time_str, worked_str, user_id]])
+
+        await interaction.followup.send(
+            f"✅ {display} приключи смяната в {end_time_str} (⏳ {worked_str})",
+            ephemeral=False
+        )
+        print(f"[ENDSHIFT] Успешно приключване за ред {row}")
 
     except Exception as e:
         print(f"[ENDSHIFT] Необработена грешка: {e}")
@@ -148,8 +189,8 @@ async def endshift(interaction: discord.Interaction):
 async def leave(interaction: discord.Interaction, start_date: str, end_date: str, reason: str):
     await interaction.response.defer(ephemeral=False)
 
-    user_nickname = get_nickname(interaction)
-    print(f"[LEAVE] Начало на обработка за {user_nickname}")
+    display, _ = get_username_and_nick(interaction)
+    print(f"[LEAVE] Начало за {display}")
 
     try:
         start_dt = datetime.strptime(start_date, "%d.%m.%Y")
@@ -175,9 +216,8 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
             await interaction.followup.send("❌ Моля, предостави причина за отпуска!", ephemeral=False)
             return
 
-        # Записваме отпуска с прякора, тъй като тук няма нужда от ID
         leaves_sheet.append_row([
-            user_nickname,
+            display,
             start_dt.strftime("%Y-%m-%d"),
             end_dt.strftime("%Y-%m-%d"),
             total_days,
@@ -185,7 +225,7 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
         ])
 
         await interaction.followup.send(
-            f"✅ {user_nickname} заяви отпуск от {start_date} до {end_date} ({total_days} дни)\n"
+            f"✅ {display} заяви отпуск от {start_date} до {end_date} ({total_days} дни)\n"
             f"📝 **Причина:** {reason}",
             ephemeral=False
         )
@@ -203,27 +243,27 @@ async def leave(interaction: discord.Interaction, start_date: str, end_date: str
 async def report(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
 
-    user_id = str(interaction.user.id)
-    user_nickname = get_nickname(interaction)
-    print(f"[REPORT] Начало на обработка за {user_nickname} (ID: {user_id})")
+    display, user_id = get_username_and_nick(interaction)
+    print(f"[REPORT] Начало за {display} (ID: {user_id})")
 
     try:
-        # Взимаме всички редове и филтрираме тези, които съдържат ID-то на потребителя
-        all_records = shifts_sheet.get_all_values()
-        # Пропускаме хедъра (първия ред) и търсим по ID
-        user_records = [row for row in all_records[1:] if row and row[0].startswith(user_id)]
-        
-        if not user_records:
+        all_rows = shifts_sheet.get_all_values()
+        # Филтър по ID (E колона). Ако няма такива, падаме към display (A колона).
+        user_rows = [r for r in all_rows[1:] if len(r) >= 5 and r[4] == user_id]
+        if not user_rows:
+            user_rows = [r for r in all_rows[1:] if len(r) >= 1 and r[0] == display]
+
+        if not user_rows:
             await interaction.followup.send("❌ Няма записано работно време!", ephemeral=False)
             return
 
-        report_text = f"📋 **Отчет за работното време на {user_nickname}:**\n"
-        for row in user_records[-15:]: # Показваме последните 15 записа
-            start = row[1] if len(row) > 1 else "❓"
-            end = row[2] if len(row) > 2 else "❓"
-            worked_time = row[3] if len(row) > 3 else "Неизвестно"
+        report_text = f"📋 **Отчет за {display}:**\n"
+        for r in user_rows[-15:]:
+            start = r[1] if len(r) > 1 else "❓"
+            end = r[2] if len(r) > 2 else "❓"
+            worked_time = r[3] if len(r) > 3 else "Неизвестно"
             report_text += f"📅 {start} ➝ {end} ⏳ {worked_time}\n"
-            
+
         await interaction.followup.send(report_text, ephemeral=False)
     except Exception as e:
         print(f"[REPORT] Грешка в /report: {e}")
